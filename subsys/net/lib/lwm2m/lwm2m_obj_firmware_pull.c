@@ -457,7 +457,7 @@ int lwm2m_firmware_cancel_transfer(void)
 	return 0;
 }
 
-int lwm2m_firmware_start_transfer(char *package_uri)
+int lwm2m_firmware_start_transfer(uint16_t obj_inst_id, char *package_uri)
 {
 	/* close old socket */
 	if (firmware_ctx.sock_fd > -1) {
