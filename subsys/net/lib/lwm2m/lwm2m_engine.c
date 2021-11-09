@@ -2007,11 +2007,22 @@ int lwm2m_engine_update_observer_max_period(char *pathstr, uint32_t period_s)
 
 void lwm2m_engine_get_binding(char *binding)
 {
+	/* Defaults to UDP. */
+	strcpy(binding, "U");
+#if CONFIG_LWM2M_VERSION_1_0
+	/* In LwM2M 1.0 binding and queue mode are in same parameter */
+	char queue[2];
+	lwm2m_engine_get_queue_mode(queue);
+	strcat(binding, queue);
+#endif
+}
+
+void lwm2m_engine_get_queue_mode(char *queue)
+{
 	if (IS_ENABLED(CONFIG_LWM2M_QUEUE_MODE_ENABLED)) {
-		strcpy(binding, "UQ");
+		strcpy(queue, "Q");
 	} else {
-		/* Defaults to UDP. */
-		strcpy(binding, "U");
+		strcpy(queue, "");
 	}
 }
 
