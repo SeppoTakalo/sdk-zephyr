@@ -67,8 +67,8 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #define CLIENT_EP_LEN		CONFIG_LWM2M_RD_CLIENT_ENDPOINT_NAME_MAX_LENGTH
 
-/* Up to 3 characters + NULL */
-#define CLIENT_BINDING_LEN sizeof("UQS")
+#define CLIENT_BINDING_LEN sizeof("U")
+#define CLIENT_QUEUE_LEN sizeof("Q")
 
 /* The states for the RD client state machine */
 /*
@@ -665,6 +665,7 @@ static int sm_send_registration(bool send_obj_support_data,
 	struct lwm2m_message *msg;
 	int ret;
 	char binding[CLIENT_BINDING_LEN];
+	char queue[CLIENT_QUEUE_LEN];
 
 	msg = lwm2m_get_message(client.ctx);
 	if (!msg) {
@@ -746,8 +747,9 @@ static int sm_send_registration(bool send_obj_support_data,
 	}
 
 	lwm2m_engine_get_binding(binding);
-	/* UDP is a default binding, no need to add option if UDP is used. */
-	if ((!sm_is_registered() && strcmp(binding, "U") != 0)) {
+	lwm2m_engine_get_queue_mode(queue);
+	/* UDP is a default binding, no need to add option if UDP without queue is used. */
+	if ((!sm_is_registered() && (strcmp(binding, "U") != 0 || strcmp(queue, "Q") == 0))) {
 		snprintk(query_buffer, sizeof(query_buffer) - 1,
 			 "b=%s", binding);
 
@@ -756,6 +758,17 @@ static int sm_send_registration(bool send_obj_support_data,
 			query_buffer, strlen(query_buffer));
 		if (ret < 0) {
 			goto cleanup;
+		}
+
+		uint16_t len = strlen(queue);
+
+		if (len) {
+			ret = coap_packet_append_option(
+				&msg->cpkt, COAP_OPTION_URI_QUERY,
+				queue, len);
+			if (ret < 0) {
+				goto cleanup;
+			}
 		}
 	}
 
@@ -783,6 +796,7 @@ static int sm_send_registration(bool send_obj_support_data,
 	return 0;
 
 cleanup:
+	LOG_ERR("error %d when sending registration message", ret);
 	lwm2m_reset_message(msg, true);
 	return ret;
 }

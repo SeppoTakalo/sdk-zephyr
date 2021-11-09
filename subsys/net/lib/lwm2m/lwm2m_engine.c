@@ -2072,11 +2072,16 @@ int lwm2m_engine_update_observer_max_period(char *pathstr, uint32_t period_s)
 
 void lwm2m_engine_get_binding(char *binding)
 {
+	/* Defaults to UDP. */
+	strcpy(binding, "U");
+}
+
+void lwm2m_engine_get_queue_mode(char *queue)
+{
 	if (IS_ENABLED(CONFIG_LWM2M_QUEUE_MODE_ENABLED)) {
-		strcpy(binding, "UQ");
+		strcpy(queue, "Q");
 	} else {
-		/* Defaults to UDP. */
-		strcpy(binding, "U");
+		strcpy(queue, "");
 	}
 }
 

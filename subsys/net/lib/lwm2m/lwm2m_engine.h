@@ -11,7 +11,7 @@
 #include "lwm2m_object.h"
 
 #define LWM2M_PROTOCOL_VERSION_MAJOR 1
-#define LWM2M_PROTOCOL_VERSION_MINOR 0
+#define LWM2M_PROTOCOL_VERSION_MINOR 1
 
 #define LWM2M_PROTOCOL_VERSION_STRING STRINGIFY(LWM2M_PROTOCOL_VERSION_MAJOR) \
 				      "." \
@@ -114,6 +114,7 @@ int lwm2m_engine_get_resource(char *pathstr,
 			      struct lwm2m_engine_res **res);
 
 void lwm2m_engine_get_binding(char *binding);
+void lwm2m_engine_get_queue_mode(char *queue);
 
 size_t lwm2m_engine_get_opaque_more(struct lwm2m_input_context *in,
 				    uint8_t *buf, size_t buflen,
