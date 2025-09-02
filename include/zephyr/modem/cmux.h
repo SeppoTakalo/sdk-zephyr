@@ -65,6 +65,10 @@ enum modem_cmux_state {
 	MODEM_CMUX_STATE_DISCONNECTED = 0,
 	MODEM_CMUX_STATE_CONNECTING,
 	MODEM_CMUX_STATE_CONNECTED,
+	MODEM_CMUX_STATE_ENTER_POWERSAVE,
+	MODEM_CMUX_STATE_POWERSAVE,
+	MODEM_CMUX_STATE_CONFIRM_POWERSAVE,
+	MODEM_CMUX_STATE_WAKEUP,
 	MODEM_CMUX_STATE_DISCONNECTING,
 };
 
@@ -180,6 +184,7 @@ struct modem_cmux {
 
 	/* Synchronize actions */
 	struct k_event event;
+	k_timepoint_t t3_timeout;
 
 	/* Statistics */
 #if CONFIG_MODEM_STATS
