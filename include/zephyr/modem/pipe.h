@@ -6,6 +6,7 @@
 
 #include <zephyr/types.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/device.h>
 
 #ifndef ZEPHYR_MODEM_PIPE_
 #define ZEPHYR_MODEM_PIPE_
