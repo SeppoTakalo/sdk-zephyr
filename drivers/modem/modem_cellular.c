@@ -83,6 +83,7 @@ enum modem_cellular_event {
 	MODEM_CELLULAR_EVENT_BUS_OPENED,
 	MODEM_CELLULAR_EVENT_BUS_CLOSED,
 	MODEM_CELLULAR_EVENT_PPP_DEAD,
+	MODEM_CELLULAR_EVENT_RING,
 };
 
 struct modem_cellular_data {
@@ -144,6 +145,12 @@ struct modem_cellular_data {
 	uint8_t event_buf[8];
 	struct ring_buf event_rb;
 	struct k_mutex event_rb_lock;
+
+	/* Ring interrupt */
+	struct gpio_callback ring_gpio_cb;
+	struct k_work_delayable ring_work;
+	bool ring_detected : 1;
+	bool cmux_dev_acquired : 1;
 };
 
 struct modem_cellular_user_pipe {
@@ -160,6 +167,7 @@ struct modem_cellular_config {
 	struct gpio_dt_spec power_gpio;
 	struct gpio_dt_spec reset_gpio;
 	struct gpio_dt_spec wake_gpio;
+	struct gpio_dt_spec ring_gpio;
 	uint16_t power_pulse_duration_ms;
 	uint16_t reset_pulse_duration_ms;
 	uint16_t startup_time_ms;
@@ -247,6 +255,8 @@ static const char *modem_cellular_event_str(enum modem_cellular_event event)
 		return "bus closed";
 	case MODEM_CELLULAR_EVENT_PPP_DEAD:
 		return "ppp dead";
+	case MODEM_CELLULAR_EVENT_RING:
+		return "RING";
 	}
 
 	return "";
@@ -1145,7 +1155,17 @@ static void modem_cellular_carrier_on_event_handler(struct modem_cellular_data *
 		modem_ppp_release(data->ppp);
 		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_INIT_POWER_OFF);
 		break;
-
+	case MODEM_CELLULAR_EVENT_RING:
+		LOG_INF("RING received!");
+		/* Trigger wake up by acquiring the device and releasing it in a delay */
+		if (MODEM_CMUX_PM_ENABLED && config->cmux_runtime_pm && config->cmux_dev) {
+			if (!data->cmux_dev_acquired) {
+				pm_device_runtime_get(config->cmux_dev);
+				data->cmux_dev_acquired = true;
+			}
+			k_work_reschedule(&data->ring_work, K_SECONDS(1));
+		}
+		break;
 	default:
 		break;
 	}
@@ -1807,6 +1827,37 @@ static void net_mgmt_event_handler(struct net_mgmt_event_callback *cb, uint64_t 
 	}
 }
 
+static void modem_cellular_ring_work_handler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct modem_cellular_data *data =
+		CONTAINER_OF(dwork, struct modem_cellular_data, ring_work);
+	struct modem_cellular_config *config = (struct modem_cellular_config *)data->dev->config;
+
+	if (data->ring_detected) {
+		data->ring_detected = false;
+		LOG_INF("Ring signal detected");
+		modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_RING);
+		return;
+	}
+	if (data->cmux_dev_acquired) {
+		data->cmux_dev_acquired = false;
+		LOG_DBG("Release CMUX device");
+		pm_device_runtime_put_async(config->cmux_dev, K_NO_WAIT);
+	}
+}
+
+static void modem_cellular_ring_gpio_callback(const struct device *dev, struct gpio_callback *cb,
+					      uint32_t pins)
+{
+	struct modem_cellular_data *data =
+		CONTAINER_OF(cb, struct modem_cellular_data, ring_gpio_cb);
+
+	data->ring_detected = true;
+	/* Schedule work to handle ring event */
+	k_work_reschedule(&data->ring_work, K_NO_WAIT);
+}
+
 static int modem_cellular_init(const struct device *dev)
 {
 	struct modem_cellular_data *data = (struct modem_cellular_data *)dev->data;
@@ -1815,6 +1866,7 @@ static int modem_cellular_init(const struct device *dev)
 	data->dev = dev;
 
 	k_work_init_delayable(&data->timeout_work, modem_cellular_timeout_handler);
+	k_work_init_delayable(&data->ring_work, modem_cellular_ring_work_handler);
 	k_work_init(&data->event_dispatch_work, modem_cellular_event_dispatch_handler);
 	ring_buf_init(&data->event_rb, sizeof(data->event_buf), data->event_buf);
 
@@ -1830,6 +1882,34 @@ static int modem_cellular_init(const struct device *dev)
 
 	if (modem_cellular_gpio_is_enabled(&config->reset_gpio)) {
 		gpio_pin_configure_dt(&config->reset_gpio, GPIO_OUTPUT_ACTIVE);
+	}
+
+	// Add ring GPIO interrupt configuration
+	if (modem_cellular_gpio_is_enabled(&config->ring_gpio)) {
+		int ret;
+
+		ret = gpio_pin_configure_dt(&config->ring_gpio, GPIO_INPUT);
+		if (ret < 0) {
+			LOG_ERR("Failed to configure ring GPIO (%d)", ret);
+			return ret;
+		}
+
+		gpio_init_callback(&data->ring_gpio_cb, modem_cellular_ring_gpio_callback,
+				   BIT(config->ring_gpio.pin));
+
+		ret = gpio_add_callback(config->ring_gpio.port, &data->ring_gpio_cb);
+		if (ret < 0) {
+			LOG_ERR("Failed to add ring GPIO callback (%d)", ret);
+			return ret;
+		}
+
+		ret = gpio_pin_interrupt_configure_dt(&config->ring_gpio, GPIO_INT_EDGE_TO_ACTIVE);
+		if (ret < 0) {
+			LOG_ERR("Failed to configure ring GPIO interrupt (%d)", ret);
+			return ret;
+		}
+
+		LOG_DBG("Ring GPIO interrupt configured");
 	}
 
 	{
@@ -2642,6 +2722,7 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 		.power_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_power_gpios, {}),                 \
 		.reset_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_reset_gpios, {}),                 \
 		.wake_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_wake_gpios, {}),                   \
+		.ring_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_ring_gpios, {}),                   \
 		.power_pulse_duration_ms = (power_ms),                                             \
 		.reset_pulse_duration_ms = (reset_ms),                                             \
 		.startup_time_ms  = (startup_ms),                                                  \
