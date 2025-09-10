@@ -55,6 +55,12 @@ typedef void (*modem_cmux_callback)(struct modem_cmux *cmux, enum modem_cmux_eve
  * @cond INTERNAL_HIDDEN
  */
 
+#if IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) && CONFIG_MODEM_CMUX_IDLE_TIMEOUT > 0
+#define MODEM_CMUX_PM_ENABLED 1
+#else
+#define MODEM_CMUX_PM_ENABLED 0
+#endif
+
 enum modem_cmux_state {
 	MODEM_CMUX_STATE_DISCONNECTED = 0,
 	MODEM_CMUX_STATE_CONNECTING,
@@ -146,6 +152,7 @@ struct modem_cmux {
 	enum modem_cmux_state state;
 	bool flow_control_on : 1;
 	bool initiator : 1;
+	bool runtime_pm : 1;
 
 	/* Work lock */
 	bool attached : 1;
@@ -175,16 +182,20 @@ struct modem_cmux {
 	struct k_work_delayable transmit_work;
 	struct k_work_delayable connect_work;
 	struct k_work_delayable disconnect_work;
+	struct k_work_delayable runtime_pm_work;
 
 	/* Synchronize actions */
 	struct k_event event;
 	k_timepoint_t t3_timeout;
+	k_timepoint_t idle_timeout;
 
 	/* Statistics */
 #if CONFIG_MODEM_STATS
 	struct modem_stats_buffer receive_buf_stats;
 	struct modem_stats_buffer transmit_buf_stats;
 #endif
+	/** Device for runtime power management, or NULL if not used */
+	const struct device *dev;
 };
 
 /**
@@ -207,6 +218,8 @@ struct modem_cmux_config {
 	uint8_t *transmit_buf;
 	/** Size of transmit buffer in bytes [149, ...] */
 	uint16_t transmit_buf_size;
+	/** Device for runtime power management, or NULL if runtime PM is not used */
+	const struct device *dev;
 };
 
 /**
@@ -305,6 +318,20 @@ int modem_cmux_disconnect_async(struct modem_cmux *cmux);
  * @note The bus pipe can be used directly again after CMUX instance is released.
  */
 void modem_cmux_release(struct modem_cmux *cmux);
+
+/**
+ * @cond INTERNAL_HIDDEN
+ *
+ * Internal functions for initializing the CMUX power management.
+ * Not to be used directly.
+ */
+
+int modem_cmux_pm_action(const struct device *dev, enum pm_device_action action);
+int modem_cmux_pm_init(const struct device *dev);
+
+/**
+ * @endcond
+ */
 
 /**
  * @}

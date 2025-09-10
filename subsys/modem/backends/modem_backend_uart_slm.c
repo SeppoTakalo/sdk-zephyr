@@ -469,6 +469,9 @@ struct modem_pipe *modem_backend_uart_slm_init(struct modem_backend_uart_slm *ba
 
 	memset(backend, 0x00, sizeof(*backend));
 	backend->uart = config->uart;
+	if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME)) {
+		backend->pipe.dev = config->uart;
+	}
 	k_work_init_delayable(&backend->receive_ready_work,
 			      modem_backend_uart_slm_receive_ready_handler);
 	k_work_init(&backend->transmit_idle_work, modem_backend_uart_slm_transmit_idle_handler);

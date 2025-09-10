@@ -6,6 +6,7 @@
 
 #include <zephyr/types.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/device.h>
 
 #ifndef ZEPHYR_MODEM_PIPE_
 #define ZEPHYR_MODEM_PIPE_
@@ -68,6 +69,7 @@ struct modem_pipe {
 	void *user_data;
 	struct k_spinlock spinlock;
 	struct k_event event;
+	const struct device *dev; /**< Device for runtime power management, or NULL if not used */
 };
 
 /**

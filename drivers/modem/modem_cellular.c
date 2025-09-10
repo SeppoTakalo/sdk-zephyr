@@ -17,6 +17,8 @@
 #include <zephyr/modem/backend/uart.h>
 #include <zephyr/net/ppp.h>
 #include <zephyr/pm/device.h>
+#include <zephyr/pm/device.h>
+#include <zephyr/pm/device_runtime.h>
 #include <zephyr/sys/atomic.h>
 
 #include <zephyr/logging/log.h>
@@ -163,6 +165,8 @@ struct modem_cellular_config {
 	uint16_t startup_time_ms;
 	uint16_t shutdown_time_ms;
 	bool autostarts;
+	bool cmux_runtime_pm;
+	const struct device *cmux_dev;	/**< CMUX device when runtime power management is enabled */
 	const struct modem_chat_script *init_chat_script;
 	const struct modem_chat_script *dial_chat_script;
 	const struct modem_chat_script *periodic_chat_script;
@@ -621,6 +625,9 @@ static int modem_cellular_on_idle_state_enter(struct modem_cellular_data *data)
 	modem_cellular_notify_user_pipes_disconnected(data);
 	modem_chat_release(&data->chat);
 	modem_ppp_release(data->ppp);
+	if (MODEM_CMUX_PM_ENABLED && config->cmux_runtime_pm) {
+		pm_device_runtime_get(config->uart);
+	}
 	modem_cmux_release(&data->cmux);
 	modem_pipe_close_async(data->uart_pipe);
 	k_sem_give(&data->suspended_sem);
@@ -929,6 +936,9 @@ static int modem_cellular_on_connect_cmux_state_enter(struct modem_cellular_data
 static void modem_cellular_connect_cmux_event_handler(struct modem_cellular_data *data,
 						      enum modem_cellular_event evt)
 {
+	const struct modem_cellular_config *config =
+		(const struct modem_cellular_config *)data->dev->config;
+
 	switch (evt) {
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
 		modem_pipe_attach(data->uart_pipe, modem_cellular_bus_pipe_handler, data);
@@ -937,6 +947,10 @@ static void modem_cellular_connect_cmux_event_handler(struct modem_cellular_data
 
 	case MODEM_CELLULAR_EVENT_BUS_OPENED:
 		modem_cmux_attach(&data->cmux, data->uart_pipe);
+		if (MODEM_CMUX_PM_ENABLED && config->cmux_runtime_pm) {
+			/* From now on, the CMUX controls the UART power management */
+			pm_device_runtime_put_async(config->uart, K_NO_WAIT);
+		}
 		modem_cmux_connect_async(&data->cmux);
 		break;
 
@@ -1752,10 +1766,12 @@ static DEVICE_API(cellular, modem_cellular_api) = {
 static int modem_cellular_pm_action(const struct device *dev, enum pm_device_action action)
 {
 	struct modem_cellular_data *data = (struct modem_cellular_data *)dev->data;
+	struct modem_cellular_config *config = (struct modem_cellular_config *)dev->config;
 	int ret;
 
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
+		pm_device_runtime_get(config->uart);
 		modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_RESUME);
 		ret = 0;
 		break;
@@ -1763,6 +1779,7 @@ static int modem_cellular_pm_action(const struct device *dev, enum pm_device_act
 	case PM_DEVICE_ACTION_SUSPEND:
 		modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_SUSPEND);
 		ret = k_sem_take(&data->suspended_sem, K_SECONDS(30));
+		pm_device_runtime_put_async(config->uart, K_NO_WAIT);
 		break;
 
 	default:
@@ -1798,7 +1815,6 @@ static int modem_cellular_init(const struct device *dev)
 	data->dev = dev;
 
 	k_work_init_delayable(&data->timeout_work, modem_cellular_timeout_handler);
-
 	k_work_init(&data->event_dispatch_work, modem_cellular_event_dispatch_handler);
 	ring_buf_init(&data->event_rb, sizeof(data->event_buf), data->event_buf);
 
@@ -1829,6 +1845,10 @@ static int modem_cellular_init(const struct device *dev)
 							  &uart_backend_config);
 
 		data->cmd_pipe = NULL;
+		if (MODEM_CMUX_PM_ENABLED && config->cmux_runtime_pm) {
+			pm_device_runtime_enable(config->uart);
+			data->uart_pipe->dev = config->uart;
+		}
 	}
 
 	{
@@ -1839,6 +1859,7 @@ static int modem_cellular_init(const struct device *dev)
 			.receive_buf_size = ARRAY_SIZE(data->cmux_receive_buf),
 			.transmit_buf = data->cmux_transmit_buf,
 			.transmit_buf_size = ARRAY_SIZE(data->cmux_transmit_buf),
+			.dev = config->cmux_runtime_pm ? config->cmux_dev : NULL,
 		};
 
 		modem_cmux_init(&data->cmux, &cmux_config);
@@ -2589,6 +2610,25 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				   (,), inst, __VA_ARGS__)                                         \
 	);
 
+#if MODEM_CMUX_PM_ENABLED
+#define CMUX_PM_DEV(inst) DEVICE_NAME_GET(MODEM_CELLULAR_INST_NAME(cmux_pm_, inst))
+#define CMUX_NAME(inst) MODEM_CELLULAR_INST_NAME(cmux_, inst)
+#define CMUX_DEV(inst) DEVICE_GET(CMUX_NAME(inst))
+
+#define MODEM_CMUX_PM_DEVICE_DEFINE(inst)                                                          \
+	static struct modem_cellular_data MODEM_CELLULAR_INST_NAME(data, inst);                    \
+	static const struct modem_cellular_config MODEM_CELLULAR_INST_NAME(config, inst);          \
+	PM_DEVICE_DEFINE(CMUX_PM_DEV(inst), modem_cmux_pm_action);                                 \
+	DEVICE_DEFINE(CMUX_NAME(inst), STRINGIFY(CMUX_NAME(inst)), modem_cmux_pm_init,             \
+						 PM_DEVICE_GET(CMUX_PM_DEV(inst)),                 \
+						 &MODEM_CELLULAR_INST_NAME(data, inst).cmux,       \
+						 &MODEM_CELLULAR_INST_NAME(config, inst),          \
+						 POST_KERNEL, 98, NULL);
+#else
+#define MODEM_CMUX_PM_DEVICE_DEFINE(inst)
+#define CMUX_DEV(inst) NULL
+#endif
+
 /* Helper to define modem instance */
 #define MODEM_CELLULAR_DEFINE_INSTANCE(inst, power_ms, reset_ms, startup_ms, shutdown_ms, start,   \
 				       set_baudrate_script,                                        \
@@ -2596,6 +2636,7 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       dial_script,                                                \
 				       periodic_script,                                            \
 				       shutdown_script)                                            \
+	MODEM_CMUX_PM_DEVICE_DEFINE(inst)                                                          \
 	static const struct modem_cellular_config MODEM_CELLULAR_INST_NAME(config, inst) = {       \
 		.uart = DEVICE_DT_GET(DT_INST_BUS(inst)),                                          \
 		.power_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_power_gpios, {}),                 \
@@ -2606,6 +2647,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 		.startup_time_ms  = (startup_ms),                                                  \
 		.shutdown_time_ms = (shutdown_ms),                                                 \
 		.autostarts       = (start),                                                       \
+		.cmux_runtime_pm = DT_INST_PROP_OR(inst, cmux_runtime_pm, 0),                      \
+		.cmux_dev = CMUX_DEV(inst),                                                        \
 		.set_baudrate_chat_script    = (set_baudrate_script),                              \
 		.init_chat_script            = (init_script),                                      \
 		.dial_chat_script            = (dial_script),                                      \

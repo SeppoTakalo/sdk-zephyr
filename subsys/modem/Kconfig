@@ -59,6 +59,23 @@ config MODEM_CMUX_WORK_BUFFER_SIZE
 	  Size of the work buffer used by the CMUX module.
 	  Recommended size is MODEM_CMUX_MTU + 7 (CMUX header size).
 
+config MODEM_CMUX_IDLE_TIMEOUT
+	int "CMUX idle timeout in seconds"
+	default 0
+	help
+	  Time in seconds to wait before entering power saving mode when
+	  there is no activity on any of the CMUX channels.
+	  Set to 0 to disable power saving mode.
+	  Power saving requires PM_DEVICE_RUNTIME to be enabled.
+
+config MODEM_CMUX_T3_TIMEOUT
+	int "CMUX T3 timeout in seconds"
+	range 1 255
+	default 10
+	help
+	  Response Timer for wake-up procedure(T3).
+	  Time in seconds before the link is considered dead.
+
 module = MODEM_CMUX
 module-str = modem_cmux
 source "subsys/logging/Kconfig.template.log_config"

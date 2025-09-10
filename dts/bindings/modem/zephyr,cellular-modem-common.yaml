@@ -17,3 +17,7 @@ properties:
   mdm-wake-gpios:
     type: phandle-array
     description: GPIO for modem wake
+
+  cmux-runtime-pm:
+    type: boolean
+    description: Enable runtime power management for CMUX driver
