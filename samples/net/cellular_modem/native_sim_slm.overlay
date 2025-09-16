@@ -1,0 +1,34 @@
+/ {
+    aliases {
+        modem = &modem;
+    };
+
+    uart2: uart2 {
+        status = "okay";
+        compatible = "zephyr,native-tty-uart";
+        serial-port = "/dev/ttyACM0";
+        current-speed = <115200>;
+        hw-flow-control;
+
+        uart_dtr: uart-dtr {
+            compatible = "zephyr,uart-dtr";
+            dtr-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+            status = "okay";
+
+            modem: modem {
+                compatible = "nordic,nrf91-slm";
+                status = "okay";
+                mdm-ring-gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+                zephyr,pm-device-runtime-auto;
+            };
+        };
+    };
+
+    gpio0: gpio_emul {
+        compatible = "zephyr,gpio-emul";
+        gpio-controller;
+        #gpio-cells = <2>;
+        ngpios = <32>;
+        status = "okay";
+    };
+};
