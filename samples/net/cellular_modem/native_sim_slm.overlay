@@ -1,0 +1,20 @@
+/ {
+    aliases {
+        modem = &modem;
+    };
+
+    uart2: uart2 {
+        status = "okay";
+        compatible = "zephyr,native-tty-uart";
+        serial-port = "/dev/ttyACM0";
+        current-speed = <115200>;
+        hw-flow-control;
+
+        modem: modem {
+            compatible = "nordic,nrf91-slm";
+            status = "okay";
+            zephyr,pm-device-runtime-auto;
+        };
+    };
+
+};
