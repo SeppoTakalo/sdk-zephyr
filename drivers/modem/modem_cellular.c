@@ -2589,12 +2589,14 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(nordic_nrf91_slm_dial_chat_script_cmds,
 MODEM_CHAT_SCRIPT_DEFINE(nordic_nrf91_slm_dial_chat_script, nordic_nrf91_slm_dial_chat_script_cmds,
 			 dial_abort_matches, modem_cellular_chat_callback_handler, 10);
 
-MODEM_CHAT_SCRIPT_CMDS_DEFINE(nordic_nrf91_slm_periodic_chat_script_cmds,
-			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG?", ok_match));
+MODEM_CHAT_SCRIPT_EMPTY_DEFINE(nordic_nrf91_slm_periodic_chat_script);
 
-MODEM_CHAT_SCRIPT_DEFINE(nordic_nrf91_slm_periodic_chat_script,
-			 nordic_nrf91_slm_periodic_chat_script_cmds, abort_matches,
-			 modem_cellular_chat_callback_handler, 4);
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(nordic_nrf91_slm_shutdown_script_cmds,
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=0", ok_match));
+
+MODEM_CHAT_SCRIPT_DEFINE(nordic_nrf91_slm_shutdown_script, nordic_nrf91_slm_shutdown_script_cmds,
+			 abort_matches, modem_cellular_chat_callback_handler, 10);
+
 #endif
 
 #if DT_HAS_COMPAT_STATUS_OKAY(sqn_gm02s)
@@ -2972,7 +2974,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &nordic_nrf91_slm_init_chat_script,                         \
 				       &nordic_nrf91_slm_dial_chat_script,                         \
-				       &nordic_nrf91_slm_periodic_chat_script, NULL)
+				       &nordic_nrf91_slm_periodic_chat_script,                     \
+				       &nordic_nrf91_slm_shutdown_script)
 
 #define MODEM_CELLULAR_DEVICE_SQN_GM02S(inst)                                                      \
 	MODEM_PPP_DEFINE(MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);                 \
