@@ -22,6 +22,12 @@ properties:
     type: phandle-array
     description: GPIO for modem ring indicator
 
+  mdm-dtr-gpios:
+    type: phandle-array
+    description: GPIO for modem data terminal ready.
+                 Asserted (logical high) when UART is active and
+                 deasserted (logical low) when UART is inactive, powered down or in low power mode.
+
   cmux-enable-runtime-power-save:
     type: boolean
     description: Enable runtime power saving using CMUX PSC commands.

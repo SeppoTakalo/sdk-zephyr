@@ -12,6 +12,7 @@ LOG_MODULE_REGISTER(modem_backend_uart_async, CONFIG_MODEM_MODULES_LOG_LEVEL);
 
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device_runtime.h>
+#include <zephyr/drivers/gpio.h>
 #include <string.h>
 
 enum {
@@ -163,6 +164,9 @@ static int modem_backend_uart_async_open(void *data)
 		LOG_ERR("Failed to power on UART: %d", ret);
 		return ret;
 	}
+	if (backend->dtr_gpio) {
+		gpio_pin_set_dt(backend->dtr_gpio, 1);
+	}
 
 	atomic_set_bit(&backend->async.common.state,
 		       MODEM_BACKEND_UART_ASYNC_STATE_RX_BUF0_USED_BIT);
@@ -283,6 +287,9 @@ static int modem_backend_uart_async_close(void *data)
 		return ret;
 	}
 	modem_pipe_notify_closed(&backend->pipe);
+	if (backend->dtr_gpio) {
+		gpio_pin_set_dt(backend->dtr_gpio, 0);
+	}
 	return 0;
 }
 

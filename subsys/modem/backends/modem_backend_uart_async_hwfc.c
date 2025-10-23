@@ -12,6 +12,7 @@ LOG_MODULE_REGISTER(modem_backend_uart_async_hwfc, CONFIG_MODEM_MODULES_LOG_LEVE
 
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device_runtime.h>
+#include <zephyr/drivers/gpio.h>
 #include <string.h>
 
 struct rx_buf_t {
@@ -228,6 +229,10 @@ static int modem_backend_uart_async_hwfc_open(void *data)
 		return ret;
 	}
 
+	if (backend->dtr_gpio) {
+		gpio_pin_set_dt(backend->dtr_gpio, 1);
+	}
+
 	atomic_clear(&backend->async.common.state);
 	atomic_set_bit(&backend->async.common.state, MODEM_BACKEND_UART_ASYNC_STATE_OPEN_BIT);
 
@@ -373,6 +378,9 @@ static int modem_backend_uart_async_hwfc_close(void *data)
 
 	modem_pipe_notify_closed(&backend->pipe);
 
+	if (backend->dtr_gpio) {
+		gpio_pin_set_dt(backend->dtr_gpio, 0);
+	}
 	return 0;
 }
 
