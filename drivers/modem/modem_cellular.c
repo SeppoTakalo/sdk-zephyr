@@ -69,6 +69,7 @@ enum modem_cellular_state {
 	MODEM_CELLULAR_STATE_OPEN_DLCI2,
 	MODEM_CELLULAR_STATE_WAIT_FOR_APN,
 	MODEM_CELLULAR_STATE_RUN_APN_SCRIPT,
+	MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT,
 	MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT,
 	MODEM_CELLULAR_STATE_AWAIT_REGISTERED,
 	MODEM_CELLULAR_STATE_CARRIER_ON,
@@ -203,6 +204,7 @@ struct modem_cellular_config {
 	const struct modem_chat_script *init_chat_script;
 	const struct modem_chat_script *dial_chat_script;
 	const struct modem_chat_script *periodic_chat_script;
+	const struct modem_chat_script *network_chat_script;
 	const struct modem_chat_script *shutdown_chat_script;
 	const struct modem_chat_script *set_baudrate_chat_script;
 	struct modem_cellular_user_pipe *user_pipes;
@@ -236,6 +238,8 @@ static const char *modem_cellular_state_str(enum modem_cellular_state state)
 		return "await registered";
 	case MODEM_CELLULAR_STATE_RUN_APN_SCRIPT:
 		return "run apn script";
+	case MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT:
+		return "run network script";
 	case MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT:
 		return "run dial script";
 	case MODEM_CELLULAR_STATE_CARRIER_ON:
@@ -314,6 +318,11 @@ static bool modem_cellular_apn_change_allowed(enum modem_cellular_state st)
 	default:
 		return false;
 	}
+}
+
+static bool modem_cellular_has_network_script(const struct modem_cellular_config *config)
+{
+	return config->network_chat_script != NULL;
 }
 
 static void modem_cellular_emit_event(struct modem_cellular_data *data,
@@ -626,7 +635,7 @@ MODEM_CHAT_MATCHES_DEFINE(unsol_matches,
 
 MODEM_CHAT_MATCHES_DEFINE(abort_matches, MODEM_CHAT_MATCH("ERROR", "", NULL));
 
-MODEM_CHAT_MATCHES_DEFINE(dial_abort_matches,
+MODEM_CHAT_MATCHES_DEFINE(__maybe_unused dial_abort_matches,
 			  MODEM_CHAT_MATCH("ERROR", "", NULL),
 			  MODEM_CHAT_MATCH("BUSY", "", NULL),
 			  MODEM_CHAT_MATCH("NO ANSWER", "", NULL),
@@ -1203,13 +1212,20 @@ static int modem_cellular_on_run_apn_script_state_enter(struct modem_cellular_da
 static void modem_cellular_run_apn_script_event_handler(struct modem_cellular_data *data,
 							enum modem_cellular_event evt)
 {
+	const struct modem_cellular_config *config =
+		(const struct modem_cellular_config *)data->dev->config;
+
 	switch (evt) {
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
 		modem_chat_attach(&data->chat, data->dlci1_pipe);
 		modem_chat_run_script_async(&data->chat, &data->apn_script);
 		break;
 	case MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS:
-		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT);
+		if (modem_cellular_has_network_script(config)) {
+			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT);
+		} else {
+			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT);
+		}
 		break;
 	case MODEM_CELLULAR_EVENT_SCRIPT_FAILED:
 		modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
@@ -1222,11 +1238,58 @@ static void modem_cellular_run_apn_script_event_handler(struct modem_cellular_da
 	}
 }
 
+static int modem_cellular_on_run_network_script_state_enter(struct modem_cellular_data *data)
+{
+	const struct modem_cellular_config *config =
+		(const struct modem_cellular_config *)data->dev->config;
+
+	modem_chat_attach(&data->chat, data->dlci1_pipe);
+	modem_chat_run_script_async(&data->chat, config->network_chat_script);
+	return 0;
+}
+
+static void modem_cellular_run_network_script_event_handler(struct modem_cellular_data *data,
+							 enum modem_cellular_event evt)
+{
+	const struct modem_cellular_config *config =
+		(const struct modem_cellular_config *)data->dev->config;
+
+	switch (evt) {
+	case MODEM_CELLULAR_EVENT_TIMEOUT:
+		modem_chat_run_script_async(&data->chat, config->periodic_chat_script);
+		break;
+	case MODEM_CELLULAR_EVENT_SCRIPT_FAILED:
+	case MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS:
+		/* Wait in this state until the network is registered.
+		 * Keep the Chat module attached to DLCI1 for "+CEREG: 1" notification
+		 */
+		modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
+		break;
+	case MODEM_CELLULAR_EVENT_REGISTERED:
+		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT);
+		break;
+	case MODEM_CELLULAR_EVENT_SUSPEND:
+		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_INIT_POWER_OFF);
+		break;
+	case MODEM_CELLULAR_EVENT_RING:
+		modem_pipe_open_async(data->uart_pipe);
+		break;
+	default:
+		break;
+	}
+}
+
+static int modem_cellular_on_run_network_script_state_leave(struct modem_cellular_data *data)
+{
+	return 0;
+}
+
 static int modem_cellular_on_run_dial_script_state_enter(struct modem_cellular_data *data)
 {
 	modem_cellular_start_timer(data, K_NO_WAIT);
 	return 0;
 }
+
 
 static void modem_cellular_run_dial_script_event_handler(struct modem_cellular_data *data,
 							 enum modem_cellular_event evt)
@@ -1243,7 +1306,21 @@ static void modem_cellular_run_dial_script_event_handler(struct modem_cellular_d
 		modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
 		break;
 	case MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS:
-		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_AWAIT_REGISTERED);
+		modem_chat_release(&data->chat);
+
+		/* PHY is now up and searching for network */
+		net_if_carrier_on(modem_ppp_get_iface(data->ppp));
+
+		if (modem_ppp_attach(data->ppp, data->dlci2_pipe) < 0) {
+			LOG_ERR("Failed to attach PPP to DLCI2");
+			modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_SUSPEND);
+		}
+		/* Check if we are already registered during the dial or network script */
+		if (modem_cellular_is_registered(data)) {
+			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_CARRIER_ON);
+		} else {
+			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_AWAIT_REGISTERED);
+		}
 		break;
 
 	case MODEM_CELLULAR_EVENT_SUSPEND:
@@ -1260,18 +1337,13 @@ static void modem_cellular_run_dial_script_event_handler(struct modem_cellular_d
 
 static int modem_cellular_on_run_dial_script_state_leave(struct modem_cellular_data *data)
 {
-	modem_chat_release(&data->chat);
-	return 0;
+	return modem_chat_attach(&data->chat, data->dlci1_pipe);
 }
 
 static int modem_cellular_on_await_registered_state_enter(struct modem_cellular_data *data)
 {
-	if (modem_ppp_attach(data->ppp, data->dlci1_pipe) < 0) {
-		return -EAGAIN;
-	}
-
 	modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
-	return modem_chat_attach(&data->chat, data->dlci2_pipe);
+	return 0;
 }
 
 static void modem_cellular_await_registered_event_handler(struct modem_cellular_data *data,
@@ -1578,6 +1650,10 @@ static int modem_cellular_on_state_enter(struct modem_cellular_data *data)
 		ret = modem_cellular_on_run_apn_script_state_enter(data);
 		break;
 
+	case MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT:
+		ret = modem_cellular_on_run_network_script_state_enter(data);
+		break;
+
 	case MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT:
 		ret = modem_cellular_on_run_dial_script_state_enter(data);
 		break;
@@ -1641,6 +1717,10 @@ static int modem_cellular_on_state_leave(struct modem_cellular_data *data)
 
 	case MODEM_CELLULAR_STATE_OPEN_DLCI2:
 		ret = modem_cellular_on_open_dlci2_state_leave(data);
+		break;
+
+	case MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT:
+		ret = modem_cellular_on_run_network_script_state_leave(data);
 		break;
 
 	case MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT:
@@ -1752,6 +1832,10 @@ static void modem_cellular_event_handler(struct modem_cellular_data *data,
 
 	case MODEM_CELLULAR_STATE_RUN_APN_SCRIPT:
 		modem_cellular_run_apn_script_event_handler(data, evt);
+		break;
+
+	case MODEM_CELLULAR_STATE_RUN_NETWORK_SCRIPT:
+		modem_cellular_run_network_script_event_handler(data, evt);
 		break;
 
 	case MODEM_CELLULAR_STATE_RUN_DIAL_SCRIPT:
@@ -2942,10 +3026,13 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				   (,), inst, __VA_ARGS__)                                         \
 	);
 
-/* Helper to define modem instance */
-#define MODEM_CELLULAR_DEFINE_INSTANCE(inst, power_ms, reset_ms, startup_ms, shutdown_ms, start,   \
-				       set_baudrate_script, init_script, dial_script,              \
-				       periodic_script, shutdown_script)                           \
+/* Helper to define modem instance with a separate scripts for:
+ *  * Network setup script to configure network and URC messages,
+ *  * PPP dial script (ATD*99# or AT+CGDATA or similar)
+ */
+#define MODEM_CELLULAR2_DEFINE_INSTANCE(inst, power_ms, reset_ms, startup_ms, shutdown_ms, start,  \
+				       set_baudrate_script, init_script, network_script,           \
+				       dial_script, periodic_script, shutdown_script)              \
 	static const struct modem_cellular_config MODEM_CELLULAR_INST_NAME(config, inst) = {       \
 		.uart = DEVICE_DT_GET(DT_INST_BUS(inst)),                                          \
 		.power_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_power_gpios, {}),                 \
@@ -2965,6 +3052,7 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 		.cmux_idle_timeout = K_MSEC(DT_INST_PROP_OR(inst, cmux_idle_timeout_ms, 0)),       \
 		.set_baudrate_chat_script = (set_baudrate_script),                                 \
 		.init_chat_script = (init_script),                                                 \
+		.network_chat_script = (network_script),                                           \
 		.dial_chat_script = (dial_script),                                                 \
 		.periodic_chat_script = (periodic_script),                                         \
 		.shutdown_chat_script = (shutdown_script),                                         \
@@ -2978,6 +3066,17 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 			      &MODEM_CELLULAR_INST_NAME(data, inst),                               \
 			      &MODEM_CELLULAR_INST_NAME(config, inst), POST_KERNEL, 99,            \
 			      &modem_cellular_api);
+
+/* Helper to define modem instance
+ * with the same script for network setup and PPP dial
+ */
+#define MODEM_CELLULAR_DEFINE_INSTANCE(inst, power_ms, reset_ms, startup_ms, shutdown_ms, start,   \
+				       set_baudrate_script, init_script, dial_script,              \
+				       periodic_script, shutdown_script)                           \
+	MODEM_CELLULAR2_DEFINE_INSTANCE(inst, power_ms, reset_ms, startup_ms, shutdown_ms, start,  \
+					set_baudrate_script, init_script, NULL, dial_script,       \
+					periodic_script, shutdown_script)
+
 
 #define MODEM_CELLULAR_DEVICE_QUECTEL_BG9X(inst)                                                   \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
