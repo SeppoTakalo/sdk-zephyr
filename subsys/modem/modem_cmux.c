@@ -1805,6 +1805,10 @@ static void modem_cmux_disconnect_handler(struct k_work *item)
 			return;
 		}
 	} else if (cmux->state != MODEM_CMUX_STATE_DISCONNECTED) {
+		if (powersave_wait_wakeup(cmux)) {
+			modem_work_schedule(&cmux->disconnect_work, MODEM_CMUX_T1_TIMEOUT);
+			return;
+		}
 		set_state(cmux, MODEM_CMUX_STATE_DISCONNECTING);
 		cmux->retry_count = 0;
 	} else {
